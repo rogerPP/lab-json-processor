@@ -429,6 +429,105 @@ final class Lab_JSON_Processor
         }
 
         foreach ($files as $file) {
+            $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
+            try {
+                if ($ext === 'json') {
+                    $res = self::handle_json($file, $dir, $pdf_dest, $processed);
+                } else {
+                    $res = self::handle_csv_sensibilidad($file, $dir, $pdf_dest, $processed);
+                }
+                
+                if ($res === 'updated') $result['updated']++;
+                else $result['created']++;
+
+            } catch (Exception $e) {
+                rename($file, $error . '/' . basename($file));
+                $result['errors']++;
+            }
+        }
+
+        update_option(self::OPTION_LAST_RUN, current_time('mysql'));
+        return $result;
+    }
+
+    /**
+     * Lógica específica para el CSV S200+ (Sensibilidad)
+     */
+    private static function handle_csv_sensibilidad($file, $dir, $pdf_dest, $processed) {
+        $base = basename($file);
+        $filename_only = pathinfo($base, PATHINFO_FILENAME);
+        $handle = fopen($file, 'r');
+        
+        $csv_data = [];
+        $paciente_nombre = '';
+        $procedencia = '';
+        $rows_count = 0;
+        $is_table = false;
+        $mediciones = [];
+
+        while (($row = fgetcsv($handle, 1000, ",")) !== FALSE) {
+            $rows_count++;
+            // Extracción de metadatos según el archivo S200+
+            if ($rows_count === 14) $paciente_nombre = $row[1] ?? '';
+            if ($rows_count === 15) $procedencia = $row[1] ?? '';
+
+            // Detección de tabla de resultados
+            if (isset($row[0]) && $row[0] === 'Parameter') {
+                $is_table = true;
+                continue;
+            }
+
+            if ($is_table && !empty($row[0])) {
+                $mediciones[] = [
+                    'parametro'        => $row[0],
+                    'valor'            => $row[1] ?? '',
+                    'unidad'           => $row[2] ?? '',
+                    'rango_referencia' => $row[3] ?? ''
+                ];
+            }
+        }
+        fclose($handle);
+
+        // Hash para evitar duplicados
+        $hash = hash_file('sha256', $file);
+        $existing = self::find_existing_post($procedencia, '', $hash);
+        $post_id = $existing ?: 0;
+
+        $tipo = 'Sensibilidad alimentaria';
+        $titulo = sprintf('Test de %s - %s', $tipo, $procedencia ?: $base);
+
+        $post_id = wp_insert_post([
+            'ID'          => $post_id,
+            'post_type'   => self::CPT,
+            'post_title'  => $titulo,
+            'post_status' => 'publish',
+        ]);
+
+        self::assign_taxonomy($post_id, $tipo);
+        update_field('tipo_test_ui', 'sensibilidad', $post_id);
+        update_field('resultados_sensibilidad', $mediciones, $post_id); // El nuevo repeater
+        
+        // Metadatos de control
+        update_post_meta($post_id, '_lab_num_peticion_procedencia', $procedencia);
+        update_post_meta($post_id, '_lab_json_hash', $hash);
+
+        // Vincular PDF si existe (Misma lógica que JSON)
+        $pdf_source = $dir . '/' . $filename_only . '.pdf';
+        if (file_exists($pdf_source)) {
+            $pdf_name = $filename_only . '.pdf';
+            if (@rename($pdf_source, $pdf_dest . '/' . $pdf_name)) {
+                update_field('ruta_pdf_resultados', home_url('/resultadospdf/' . $pdf_name), $post_id);
+            }
+        }
+
+        rename($file, $processed . '/' . $base);
+        return $existing ? 'updated' : 'created';
+    }
+
+    /**
+     * Lógica específica para el JSON (SIBO)
+     */
+    private static function handle_json($file, $dir, $pdf_dest, $processed){
             $base = basename($file);
             $filename_only = pathinfo($base, PATHINFO_FILENAME);
 
@@ -522,10 +621,6 @@ final class Lab_JSON_Processor
                     'message' => $e->getMessage(),
                 ]);
             }
-        }
-
-        update_option(self::OPTION_LAST_RUN, current_time('mysql'));
-        return $result;
     }
 
     private static function find_existing_post($procedencia, $calderon, $hash) {

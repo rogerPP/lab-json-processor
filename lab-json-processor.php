@@ -452,44 +452,66 @@ final class Lab_JSON_Processor
     /**
      * Lógica específica para el CSV S200+ (Sensibilidad)
      */
-    private static function handle_csv_sensibilidad($file, $dir, $pdf_dest, $processed) {
+    private static function handle_csv_sensibilidad($file, $dir, $pdf_dest, $processed) 
+    {
         $base = basename($file);
         $filename_only = pathinfo($base, PATHINFO_FILENAME);
         $handle = fopen($file, 'r');
         
-        $csv_data = [];
-        $paciente_nombre = '';
-        $procedencia = '';
-        $rows_count = 0;
+        $paciente_1st = '';
+        $paciente_2nd = '';
+        $procedencia = ''; // Kit Lot
+        $calderon = '';    // Slide Lot
+        $doctor = '';
+        
         $is_table = false;
         $mediciones = [];
 
-        while (($row = fgetcsv($handle, 1000, ",")) !== FALSE) {
-            $rows_count++;
-            // Extracción de metadatos según el archivo S200+
-            if ($rows_count === 14) $paciente_nombre = $row[1] ?? '';
-            if ($rows_count === 15) $procedencia = $row[1] ?? '';
+        if ($handle !== FALSE) {
+            while (($row = fgetcsv($handle, 1000, ",")) !== FALSE) {
+                // Si la fila está vacía, saltamos
+                if (empty($row) || !isset($row[0])) continue;
 
-            // Detección de tabla de resultados
-            if (isset($row[0]) && $row[0] === 'Parameter') {
-                $is_table = true;
-                continue;
-            }
+                // --- 1. EXTRACCIÓN DE CABECERA (Clave, Valor) ---
+                if (!$is_table) {
+                    $key = trim($row[0]);
+                    $val = isset($row[1]) ? trim($row[1]) : '';
 
-            if ($is_table && !empty($row[0])) {
-                $mediciones[] = [
-                    'parametro'        => $row[0],
-                    'valor'            => $row[1] ?? '',
-                    'unidad'           => $row[2] ?? '',
-                    'rango_referencia' => $row[3] ?? ''
-                ];
+                    switch ($key) {
+                        case '1st Name': $paciente_1st = $val; break;
+                        case '2nd Name': $paciente_2nd = $val; break;
+                        case 'Kit Lot':   $procedencia = $val; break;
+                        case 'Slide Lot': $calderon = $val; break;
+                        case 'Doctor':    $doctor = $val; break;
+                    }
+                }
+
+                // --- 2. DETECCIÓN DE INICIO DE TABLA ---
+                // Buscamos la fila que empieza por "FOOD (English)"
+                if ($row[0] === 'FOOD (English)') {
+                    $is_table = true;
+                    continue; // Saltamos la cabecera de la tabla
+                }
+
+                // --- 3. CAPTURA DE RESULTADOS ---
+                if ($is_table && !empty($row[0])) {
+                    // Mapeo según el orden: FOOD (Translated) -> Parametro, RESULT -> Valor, INTERPRETATION -> Rango
+                    $mediciones[] = [
+                        'parametro'        => $row[1] ?? $row[0], // Usamos el nombre traducido si existe
+                        'valor'            => $row[4] ?? '',      // RESULT está en la columna 5 (índice 4)
+                        'unidad'           => 'U/ml',             // Estas pruebas suelen ser unidades arbitrarias
+                        'rango_referencia' => $row[5] ?? ''       // INTERPRETATION está en la columna 6 (índice 5)
+                    ];
+                }
             }
+            fclose($handle);
         }
-        fclose($handle);
 
-        // Hash para evitar duplicados
+        $paciente_nombre = trim($paciente_1st . ' ' . $paciente_2nd);
         $hash = hash_file('sha256', $file);
-        $existing = self::find_existing_post($procedencia, '', $hash);
+        
+        // Buscar si ya existe
+        $existing = self::find_existing_post($procedencia, $calderon, $hash);
         $post_id = $existing ?: 0;
 
         $tipo = 'Sensibilidad alimentaria';
@@ -502,20 +524,30 @@ final class Lab_JSON_Processor
             'post_status' => 'publish',
         ]);
 
+        // Asignar Taxonomía y UI
         self::assign_taxonomy($post_id, $tipo);
         update_field('tipo_test_ui', 'sensibilidad', $post_id);
-        update_field('resultados_sensibilidad', $mediciones, $post_id); // El nuevo repeater
         
-        // Metadatos de control
+        // Guardar los ACF mapeados
+        update_field('num_peticion_procedencia', $procedencia, $post_id);
+        update_field('num_peticion_calderon', $calderon, $post_id);
+        update_field('paciente_nombre', $paciente_nombre, $post_id);
+        update_field('doctor_nombre', $doctor, $post_id);
+        
+        // Guardar el repeater de resultados
+        update_field('resultados_sensibilidad', $mediciones, $post_id);
+
+        // Metas internos para el plugin
         update_post_meta($post_id, '_lab_num_peticion_procedencia', $procedencia);
+        update_post_meta($post_id, '_lab_num_peticion_calderon', $calderon);
         update_post_meta($post_id, '_lab_json_hash', $hash);
 
-        // Vincular PDF si existe (Misma lógica que JSON)
+        // Gestión de archivos (PDF y mover CSV)
         $pdf_source = $dir . '/' . $filename_only . '.pdf';
         if (file_exists($pdf_source)) {
             $pdf_name = $filename_only . '.pdf';
             if (@rename($pdf_source, $pdf_dest . '/' . $pdf_name)) {
-                update_field('ruta_pdf_resultados', home_url('/resultadospdf/' . $pdf_name), $post_id);
+                update_field('ruta_pdf_resultados', home_url('/' . self::PDF_DIR_NAME . '/' . $pdf_name), $post_id);
             }
         }
 

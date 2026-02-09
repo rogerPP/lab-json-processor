@@ -412,7 +412,6 @@ final class Lab_JSON_Processor
         if (!is_dir($pdf_dest)) wp_mkdir_p($pdf_dest);
 
         $files = glob($dir . '/*.{json,csv}', GLOB_BRACE);
-        $files = glob($pattern);
         
         $result = [
             'dir' => $dir,

@@ -13,6 +13,7 @@ if (!defined('ABSPATH')) {
 final class Lab_JSON_Processor
 {
     const JSON_DIR_NAME = 'lab-uploads';
+    const JSON_DEST_DIR_NAME = 'json-lab';
     const PDF_DIR_NAME = 'resultadospdf';
     const CPT = 'lab_test';
     const TAX = 'tipo_test';
@@ -86,14 +87,19 @@ final class Lab_JSON_Processor
         return rtrim(ABSPATH, '/') . '/' . self::PDF_DIR_NAME;
     }
 
-    private static function processed_dir(): string
+    public static function json_dest_dir(): string 
     {
-        return rtrim(self::json_dir(), '/') . '/processed';
+        return rtrim(ABSPATH, '/') . '/' . self::JSON_DEST_DIR_NAME;
     }
 
-    private static function error_dir(): string
+    public static function processed_dir(): string
     {
-        return rtrim(self::json_dir(), '/') . '/error';
+        return rtrim(self::json_dest_dir(), '/') . '/processed';
+    }
+
+    public static function error_dir(): string
+    {
+        return rtrim(self::json_dest_dir(), '/') . '/error';
     }
 
     /* =======================
@@ -398,8 +404,8 @@ final class Lab_JSON_Processor
         $dir = self::json_dir(); // /lab-uploads
         $pdf_dest = self::pdf_dest_dir(); // /resultadospdf
         
-        $processed = '/json-lab/processed'; 
-        $error = '/json-lab/error';
+        $processed = self::processed_dir();
+        $error = self::error_dir();
 
         if (!is_dir($processed)) wp_mkdir_p($processed);
         if (!is_dir($error)) wp_mkdir_p($error);

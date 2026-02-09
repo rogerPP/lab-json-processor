@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Lab JSON Processor
  * Description: Procesa JSON de laboratorio hacia CPT + ACF. Incluye activación por código, listado por usuario y vista detalle /mi-cuenta/test/XXXXX.
- * Version: 1.1.1
+ * Version: 1.2.0
  * Author: Marketers Group
  */
 

@@ -411,7 +411,7 @@ final class Lab_JSON_Processor
         if (!is_dir($error)) wp_mkdir_p($error);
         if (!is_dir($pdf_dest)) wp_mkdir_p($pdf_dest);
 
-        $pattern = rtrim($dir, '/') . '/*.json';
+        $files = glob($dir . '/*.{json,csv}', GLOB_BRACE);
         $files = glob($pattern);
         
         $result = [

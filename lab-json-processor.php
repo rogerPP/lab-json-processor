@@ -12,6 +12,8 @@ if (!defined('ABSPATH')) {
 
 final class Lab_JSON_Processor
 {
+    const JSON_DIR_NAME = 'lab-uploads';
+    const PDF_DIR_NAME = 'resultadospdf';
     const CPT = 'lab_test';
     const TAX = 'tipo_test';
     const OPTION_LAST_RUN = 'labjson_last_run';
@@ -74,9 +76,14 @@ final class Lab_JSON_Processor
        CONFIG / PATHS
        ======================= */
 
-    public static function json_dir(): string
+    public static function json_dir(): string 
     {
-        return rtrim(ABSPATH, '/') . '/json-lab';
+        return rtrim(ABSPATH, '/') . '/' . self::JSON_DIR_NAME;
+    }
+
+    public static function pdf_dest_dir(): string 
+    {
+        return rtrim(ABSPATH, '/') . '/' . self::PDF_DIR_NAME;
     }
 
     private static function processed_dir(): string
@@ -386,136 +393,123 @@ final class Lab_JSON_Processor
        JSON PROCESSING
        ======================= */
 
-    public static function process_incoming_json(bool $manual = false): array
+    public static function process_incoming_json(bool $manual = false): array 
     {
-        $dir = self::json_dir();
-        $processed = $dir . '/processed';
-        $error = $dir . '/error';
+        $dir = self::json_dir(); // /lab-uploads
+        $pdf_dest = self::pdf_dest_dir(); // /resultadospdf
+        
+        $processed = '/json-lab/processed'; 
+        $error = '/json-lab/error';
 
-        if (!is_dir($processedDir)) wp_mkdir_p($processedDir);
-        if (!is_dir($errorDir)) wp_mkdir_p($errorDir);
+        if (!is_dir($processed)) wp_mkdir_p($processed);
+        if (!is_dir($error)) wp_mkdir_p($error);
+        if (!is_dir($pdf_dest)) wp_mkdir_p($pdf_dest);
 
         $pattern = rtrim($dir, '/') . '/*.json';
         $files = glob($pattern);
+        
         $result = [
-        'dir' => $dir,
-        'found' => is_array($files) ? count($files) : 0,
-        'created' => 0,
-        'updated' => 0,
-        'skipped' => 0,
-        'errors' => 0,
-        'files' => []
+            'dir' => $dir,
+            'found' => is_array($files) ? count($files) : 0,
+            'created' => 0,
+            'updated' => 0,
+            'errors' => 0,
+            'files' => []
         ];
 
         if (!$files) {
-        update_option(self::OPTION_LAST_RUN, current_time('mysql'));
-        return $result;
+            update_option(self::OPTION_LAST_RUN, current_time('mysql'));
+            return $result;
         }
 
         foreach ($files as $file) {
             $base = basename($file);
+            $filename_only = pathinfo($base, PATHINFO_FILENAME);
 
             try {
                 $raw = file_get_contents($file);
                 if ($raw === false || trim($raw) === '') {
-                throw new Exception('Archivo vacío o no legible');
+                    throw new Exception('Archivo vacío o no legible');
                 }
 
                 $data = json_decode($raw, true);
                 if (!is_array($data)) {
-                throw new Exception('JSON inválido');
+                    throw new Exception('JSON inválido');
                 }
 
-                // Hash para deduplicación/traqueo
                 $hash = hash('sha256', $raw);
-
-                // Extraer IDs
                 $procedencia = isset($data['num_peticion_procedencia']) ? (string)$data['num_peticion_procedencia'] : '';
                 $calderon = isset($data['num_peticion_calderon']) ? (string)$data['num_peticion_calderon'] : '';
 
-                // Buscar si ya existe por meta (procedencia+calderon) o por hash
                 $existing = self::find_existing_post($procedencia, $calderon, $hash);
-
                 $isUpdate = $existing ? true : false;
                 $post_id = $existing ?: 0;
 
-                // Inferencia tipo test (por tu JSON: H2/CH4/CO2 + sustrato => aliento/SIBO)
+                // Inferencia de tipo (Taxonomía)
                 $tipo = self::infer_tipo_test($data);
 
-                // Insert/Update post
-                $titlePieces = [];
-                if (!empty($data['paciente_nombre'])) $titlePieces[] = $data['paciente_nombre'];
-                if (!empty($data['sustrato'])) $titlePieces[] = $data['sustrato'];
-                if (!empty($calderon)) $titlePieces[] = '#' . $calderon;
+                // NUEVO: Construcción del título: Test de {nombre taxonomia} - {$procedencia}
+                $nuevo_titulo = sprintf('Test de %s - %s', $tipo, $procedencia ?: $base);
 
                 $postarr = [
-                'post_type' => self::CPT,
-                'post_title' => implode(' - ', $titlePieces) ?: $base,
-                'post_status' => 'publish',
+                    'post_type' => self::CPT,
+                    'post_title' => $nuevo_titulo,
+                    'post_status' => 'publish',
                 ];
 
                 if ($isUpdate) {
-                $postarr['ID'] = $post_id;
-                wp_update_post($postarr);
+                    $postarr['ID'] = $post_id;
+                    wp_update_post($postarr);
                 } else {
-                $post_id = wp_insert_post($postarr);
-                if (is_wp_error($post_id) || !$post_id) {
-                    throw new Exception('No se pudo crear el post');
-                }
+                    $post_id = wp_insert_post($postarr);
+                    if (is_wp_error($post_id) || !$post_id) {
+                        throw new Exception('No se pudo crear el post');
+                    }
                 }
 
-                // Asignar taxonomía
+                // Asignación de taxonomía y campos
                 self::assign_taxonomy($post_id, $tipo);
-
-                // Guardar ACF fields (si ACF está activo, update_field funciona; si no, fallback post_meta)
                 self::save_fields($post_id, $data, $file, $hash, $raw);
 
-                // Marcar metadatos para búsqueda dedupe
+                // Actualización de tipo_test_ui
+                if (function_exists('update_field')) {
+                    $ui_map = [
+                        'SIBO' => 'sibo',
+                        'Microbiota intestinal' => 'microbiota',
+                        'Sensibilidad alimentaria' => 'sensibilidad'
+                    ];
+                    if (isset($ui_map[$tipo])) {
+                        update_field('tipo_test_ui', $ui_map[$tipo], $post_id);
+                    }
+                }
+
+                // Vinculación de PDF
+                $pdf_source = $dir . '/' . $filename_only . '.pdf';
+                if (file_exists($pdf_source)) {
+                    $pdf_filename = $filename_only . '.pdf';
+                    $pdf_dest_path = $pdf_dest . '/' . $pdf_filename;
+                    
+                    if (@rename($pdf_source, $pdf_dest_path)) {
+                        $pdf_url = home_url('/' . self::PDF_DIR_NAME . '/' . $pdf_filename);
+                        update_field('ruta_pdf_resultados', $pdf_url, $post_id);
+                    }
+                }
+
+                // Metas internos
                 update_post_meta($post_id, '_lab_num_peticion_procedencia', $procedencia);
                 update_post_meta($post_id, '_lab_num_peticion_calderon', $calderon);
                 update_post_meta($post_id, '_lab_json_hash', $hash);
 
-                // Mover archivo procesado
-                $dest = $processedDir . '/' . $base;
-                @rename($file, $dest);
+                // Mover archivo JSON a la nueva ruta /lab-uploads/processed/
+                rename($file, $processed . '/' . $base);
 
                 if ($isUpdate) $result['updated']++; else $result['created']++;
 
-                $result['files'][] = [
-                'file' => $base,
-                'post_id' => $post_id,
-                'status' => $isUpdate ? 'updated' : 'created',
-                'tipo' => $tipo
-                ];
-
-                if (function_exists('update_field')) {
-                    switch ($tipo) {
-                        case 'SIBO':
-                            update_field('tipo_test_ui', 'sibo', $post_id);
-                            break;
-
-                        case 'Microbiota intestinal':
-                            update_field('tipo_test_ui', 'microbiota', $post_id);
-                            break;
-
-                        case 'Sensibilidad alimentaria':
-                            update_field('tipo_test_ui', 'sensibilidad', $post_id);
-                            break;
-                    }
-                }
-
-                rename($file, $processed . '/' . $base);
-
-                self::add_log([
-                    'file' => $base,
-                    'status' => $isUpdate ? 'updated' : 'created',
-                    'post_id' => $post_id,
-                    'post_link' => admin_url('post.php?post=' . $post_id . '&action=edit'),
-                    'tipo' => $tipo,
-                    'message' => 'Procesado correctamente'
-                ]);
             } catch (Exception $e) {
-                rename($file, $error . '/' . $base);
+                if (file_exists($file)) {
+                    rename($file, $error . '/' . $base);
+                }
+                $result['errors']++;
                 self::add_log([
                     'file' => $base,
                     'status' => 'error',

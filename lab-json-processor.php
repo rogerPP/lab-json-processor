@@ -517,7 +517,8 @@ final class Lab_JSON_Processor
                     $mediciones[] = [
                         'parametro'        => $row[1] ?: $row[0], 
                         'valor'            => $row[4] ?? '',      
-                        'rango_referencia' => $row[5] ?? ''       
+                        'rango_referencia' => $row[5] ?? '', 
+                        'grupo_alimientos' => $row[3] ?? ''       
                     ];
                 }
             }

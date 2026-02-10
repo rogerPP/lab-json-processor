@@ -59,6 +59,7 @@ final class Lab_JSON_Processor
         add_shortcode('lab_test_grafica', [__CLASS__, 'shortcode_lab_test_grafica']);
         add_shortcode('if_tipo_test', [__CLASS__, 'shortcode_if_tipo_test']);
         add_shortcode('lab_test_valores', [__CLASS__, 'shortcode_lab_test_valores']);
+        add_shortcode('grafico_sensibilidad', [__CLASS__, 'shortcode_render_grafico_sensibilidad']);
 
         // Hooks de activación
         register_activation_hook(__FILE__, [__CLASS__, 'activate']);
@@ -1120,6 +1121,54 @@ final class Lab_JSON_Processor
         </div>
         <?php
 
+        return ob_get_clean();
+    }
+
+    public static function shortcode_render_grafico_sensibilidad() 
+    {
+        $post_id = get_the_ID();
+    
+        $normal    = (int) get_field('total_normal', $post_id);
+        $elevado   = (int) get_field('total_elevado', $post_id);
+        $limite    = (int) get_field('total_limite', $post_id);
+        $alimentos = (int) get_field('total_alimentos', $post_id);
+
+        // Usamos el máximo de los 3 para la proporción
+        $max = max($normal, $elevado, $limite, 1); 
+
+        $pct_normal  = ($normal / $max) * 100;
+        $pct_limite  = ($limite / $max) * 100;
+        $pct_elevado = ($elevado / $max) * 100;
+
+        ob_start(); ?>
+        <div class="sensibilidad-stats-container">
+            
+            <div class="stat-row">
+                <div class="stat-label">Normal</div>
+                <div class="stat-bar-wrapper">
+                        <div class="stat-bar-fill color-verde" style="width: calc(2.5rem + (<?php echo $pct_normal; ?>%));"></div>
+                    <div class="stat-value"><?php echo $normal; ?></div>
+                </div>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat-label">Límite</div>
+                <div class="stat-bar-wrapper">
+                        <div class="stat-bar-fill color-amarillo" style="width: calc(2.5rem + (<?php echo $pct_limite; ?>%));"></div>
+                    <div class="stat-value"><?php echo $limite; ?></div>
+                </div>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat-label">Elevado</div>
+                <div class="stat-bar-wrapper">
+                        <div class="stat-bar-fill color-rojo" style="width: calc(2.5rem + (<?php echo $pct_elevado; ?>%));"></div>
+                    <div class="stat-value"><?php echo $elevado; ?></div>
+                </div>
+            </div>
+
+        </div>
+        <?php
         return ob_get_clean();
     }
 
